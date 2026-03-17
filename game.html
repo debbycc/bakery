@@ -1,0 +1,489 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <title>麵包糖果消消樂 - 8層定制版</title>
+    <style>
+        *{margin:0;padding:0;box-sizing:border-box;font-family:Arial}
+        body{background:linear-gradient(135deg,#f8e8d8,#f5d6ba);min-height:100vh;padding:20px;display:flex;flex-direction:column;align-items:center}
+        .game-box{width:950px;background:white;border-radius:16px;box-shadow:0 8px 24px #0002;padding:24px}
+        .top-bar{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:20px;flex-wrap:wrap}
+        .name-input{padding:8px 12px;border:2px solid #d2691e;border-radius:8px;font-size:16px}
+        .timer{font-size:24px;font-weight:bold;color:#d2691e}
+        .btn-group{display:flex;gap:8px}
+        .game-btn{padding:10px 14px;background:#ff6b35;color:white;border:none;border-radius:8px;cursor:pointer;transition:background 0.2s}
+        .game-btn:hover{background:#e85a2a}
+        .game-btn:disabled{background:#ccc;color:#666;cursor:not-allowed;transform:none}
+        .stack{width:100%;height:500px;background:#f9f1e8;border-radius:10px;position:relative;margin-bottom:20px;overflow:hidden}
+        .item{width:65px;height:65px;background:white;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:28px;position:absolute;box-shadow:0 4px 8px #0004;transition:.2s}
+        .item:hover{transform:scale(1.05)}
+        .slot-row{display:flex;gap:10px;justify-content:center;margin-bottom:20px}
+        .slot{width:65px;height:65px;border:3px dashed #d2691e;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:28px;background:white;transition:all 0.2s}
+        .rank{background:white;border-radius:10px;padding:16px;margin-top:10px}
+        .rank-title{text-align:center;font-size:18px;font-weight:bold;color:#d2691e;margin-bottom:10px}
+        .rank-table{width:100%;border-collapse:collapse}
+        .rank-table th,.rank-table td{border:1px solid #ddd;padding:8px;text-align:center}
+        .rank-table th{background:#ff6b35;color:white}
+        .modal{position:fixed;top:0;left:0;width:100%;height:100%;background:#0007;display:none;justify-content:center;align-items:center;z-index:99}
+        .modal-box{background:white;padding:30px;border-radius:16px;text-align:center;min-width:350px}
+        .modal h2{color:#d2691e;margin-bottom:20px}
+        .modal p{font-size:18px;margin-bottom:20px}
+        /* 8層z-index設定 */
+        .layer-1{z-index:8}.layer-2{z-index:7}.layer-3{z-index:6}.layer-4{z-index:5}
+        .layer-5{z-index:4}.layer-6{z-index:3}.layer-7{z-index:2}.layer-8{z-index:1}
+    </style>
+</head>
+<body>
+<div class="game-box">
+    <div class="top-bar">
+        <input class="name-input" placeholder="輸入名稱" value="玩家">
+        <div class="timer">00:00</div>
+        <div class="btn-group">
+            <button class="game-btn start">開始遊戲</button>
+            <button class="game-btn undo" disabled>復原 (剩1次)</button>
+            <button class="game-btn restart">重開本局</button>
+            <button class="game-btn shuffle" disabled>洗牌 (剩1次)</button>
+        </div>
+    </div>
+    <div class="stack" id="stack"></div>
+    <div class="slot-row" id="slotRow">
+        <div class="slot" data-i="0"></div>
+        <div class="slot" data-i="1"></div>
+        <div class="slot" data-i="2"></div>
+        <div class="slot" data-i="3"></div>
+        <div class="slot" data-i="4"></div>
+        <div class="slot" data-i="5"></div>
+    </div>
+    <div class="rank">
+        <div class="rank-title">排行榜</div>
+        <table class="rank-table">
+            <thead><tr><th>名次</th><th>玩家</th><th>時間</th></tr></thead>
+            <tbody id="rankBody"></tbody>
+        </table>
+    </div>
+</div>
+
+<!-- 通用彈窗 -->
+<div class="modal" id="gameModal">
+    <div class="modal-box">
+        <h2 id="modalTitle">提示</h2>
+        <p id="modalContent">操作提示</p>
+        <button class="game-btn modalConfirm">確定</button>
+    </div>
+</div>
+
+<script>
+// ========== 核心設定（8層、可點前6層） ==========
+const CONFIG = {
+    layers:8,                  // 8層堆疊
+    clickableLayers:6,         // 可點最上6層
+    slots:6,                   // 6個選擇區
+    match:3,                   // 3個相同消除
+    types:8,                   // 8種道具
+    perType:15,                // 每種道具15個，保證可消
+    maxUndo:1,                 // 復原每局1次
+    maxShuffle:1,              // 洗牌每局1次
+    restartUnlimited: true     // 重開無限次
+};
+const ICONS = ['🍞','🍩','🍭','🍪','🍫','🍬','🥐','🧁'];
+
+// ========== 心形參數方程（嚴格限制在邊框內） ==========
+function getHeartPoint(t, scale, cx, cy, padding) {
+    const x = 16 * Math.sin(t) ** 3;
+    const y = 13 * Math.cos(t) - 5 * Math.cos(2*t) - 2 * Math.cos(3*t) - Math.cos(4*t);
+    let finalX = cx + x * scale;
+    let finalY = cy - y * scale;
+    // 限制坐標在邊框內
+    finalX = Math.max(padding, Math.min(cx*2 - padding, finalX));
+    finalY = Math.max(padding, Math.min(cy*2 - padding, finalY));
+    return {x: finalX, y: finalY};
+}
+
+// ========== 遊戲狀態 ==========
+let state = {
+    playing:false, 
+    start:0, 
+    time:0, 
+    timer:null,
+    pool:[], 
+    items:[], 
+    slots:Array(CONFIG.slots).fill(null),
+    history:[], 
+    removed:0, 
+    total:0,
+    usedUndo:0, 
+    usedShuffle:0,
+    initData:null, 
+    name:"玩家"
+};
+
+// DOM快捷選擇
+const $ = s => document.querySelector(s);
+const $$ = s => document.querySelectorAll(s);
+const stack = $('#stack');
+const timerText = $('.timer');
+const slots = $$('.slot');
+const slotRow = $('#slotRow');
+const gameModal = $('#gameModal');
+const modalTitle = $('#modalTitle');
+const modalContent = $('#modalContent');
+const modalConfirm = $('.modalConfirm');
+
+// ========== 顯示彈窗 ==========
+function showModal(title, content, callback = ()=>{}) {
+    modalTitle.textContent = title;
+    modalContent.textContent = content;
+    gameModal.style.display = 'flex';
+    modalConfirm.onclick = () => {
+        gameModal.style.display = 'none';
+        callback();
+    };
+}
+
+// ========== 公平道具池（平均分配、保證可消） ==========
+function makeFairPool() {
+    let pool = [];
+    for(let id=0;id<CONFIG.types;id++){
+        for(let i=0;i<CONFIG.perType;i++) pool.push(id);
+    }
+    // 洗牌但保持數量平衡
+    for(let i=pool.length-1;i>0;i--){
+        const j = Math.floor(Math.random()*(i+1));
+        [pool[i], pool[j]] = [pool[j], pool[i]];
+    }
+    return pool;
+}
+
+// ========== 選擇區自動排位 ==========
+function autoArrangeSlots() {
+    // 過濾空值，保持順序
+    const filledSlots = state.slots.filter(id => id !== null);
+    // 補空值到原長度
+    const newSlots = [...filledSlots, ...Array(CONFIG.slots - filledSlots.length).fill(null)];
+    state.slots = newSlots;
+    
+    // 更新UI
+    slots.forEach((slot, idx) => {
+        slot.innerHTML = newSlots[idx] === null ? '' : ICONS[newSlots[idx]];
+        slot.dataset.id = newSlots[idx] || '';
+    });
+}
+
+// ========== 8層心形排列（嚴格在邊框內） ==========
+function renderStack(saveInit = true) {
+    stack.innerHTML = '';
+    state.items = [];
+    state.slots.fill(null);
+    slots.forEach(s=>{s.innerHTML='';s.dataset.id=''});
+    state.removed = 0;
+    state.history = [];
+    
+    // 更新按鈕狀態
+    $('.undo').disabled = true;
+    $('.undo').textContent = `復原 (剩${CONFIG.maxUndo - state.usedUndo}次)`;
+    $('.shuffle').textContent = `洗牌 (剩${CONFIG.maxShuffle - state.usedShuffle}次)`;
+    
+    const pool = makeFairPool();
+    state.total = pool.length;
+    let ptr = 0;
+    const padding = 40; 
+    const cx = stack.clientWidth / 2;
+    const cy = stack.clientHeight / 2;
+    const maxScale = Math.min(cx - padding, cy - padding) / 20;
+
+    let initList = [];
+    // 8層愛心配置（由內到外逐層放大，數量遞增）
+    const scales = [8, 10, 12, 14, 16, 18, 20, 22].map(s => s * maxScale / 22);
+    const counts = [8, 10, 12, 14, 16, 18, 20, 22]; 
+
+    for(let layer=1;layer<=CONFIG.layers;layer++){
+        const layerIdx = layer - 1;
+        const cnt = counts[layerIdx];
+        const scale = scales[layerIdx];
+        
+        for(let i=0;i<cnt && ptr<state.total;i++){
+            const t = (i / cnt) * Math.PI * 2;
+            const pos = getHeartPoint(t, scale, cx, cy, padding);
+            const id = pool[ptr++];
+
+            const div = document.createElement('div');
+            div.className = `item layer-${layer}`;
+            div.style.left = (pos.x - 32.5) + 'px';
+            div.style.top = (pos.y - 32.5) + 'px';
+            div.innerHTML = ICONS[id];
+            div.dataset.id = id;
+            div.dataset.layer = layer;
+
+            // 前6層可點擊，後2層鎖定
+            if(layer <= CONFIG.clickableLayers){
+                div.style.cursor = 'pointer';
+                div.onclick = ()=>pick(div);
+            }else{
+                div.style.cursor = 'not-allowed';
+            }
+            stack.appendChild(div);
+            state.items.push({div,id,layer,show:true});
+            initList.push({id,layer,x:pos.x,y:pos.y});
+        }
+    }
+    if(saveInit) state.initData = initList;
+}
+
+// ========== 選取元素（僅前6層可選，選擇區滿觸發Game Over） ==========
+function pick(div) {
+    if(!state.playing) return;
+    
+    const layer = +div.dataset.layer;
+    // 僅允許點擊前6層
+    if(layer > CONFIG.clickableLayers) return;
+    
+    // 檢查選擇區是否已滿
+    if(!state.slots.includes(null)) {
+        // 選擇區滿，觸發Game Over
+        showModal("Game Over", "選擇區已滿，遊戲結束！", () => {
+            gameOver(false); // 未通關結束
+        });
+        return;
+    }
+
+    saveHistory(); // 保存操作歷史
+    const id = +div.dataset.id;
+    const emptySlotIdx = state.slots.indexOf(null);
+    
+    // 放入選擇區
+    state.slots[emptySlotIdx] = id;
+    // 自動排位
+    autoArrangeSlots();
+    
+    // 隱藏原元素
+    div.style.display = 'none';
+    state.items.find(it=>it.div===div).show = false;
+
+    // 檢查消除、解鎖下一層
+    checkMatch();
+    unlockLayer(layer);
+    
+    // 檢查是否通關
+    if(state.removed >= state.total) gameOver(true);
+}
+
+// ========== 消除邏輯（3個相同消除） ==========
+function checkMatch() {
+    let countMap = {};
+    state.slots.forEach((id, idx)=>{
+        if(id !== null) {
+            if(!countMap[id]) countMap[id] = [];
+            countMap[id].push(idx);
+        }
+    });
+    
+    // 消除3個及以上的相同元素
+    let hasMatch = false;
+    for(let id in countMap){
+        const slotIdxs = countMap[id];
+        if(slotIdxs.length >= CONFIG.match){
+            slotIdxs.slice(0, CONFIG.match).forEach(idx=>{
+                state.slots[idx] = null;
+                state.removed += 1;
+            });
+            hasMatch = true;
+        }
+    }
+    
+    // 消除後重新排位
+    if(hasMatch) {
+        autoArrangeSlots();
+    }
+}
+
+// ========== 解鎖下一層（當前層全部消除後） ==========
+function unlockLayer(currentLayer) {
+    if(currentLayer >= CONFIG.layers) return;
+    
+    // 檢查當前層是否還有可見元素
+    const currentLayerItems = $$(`.layer-${currentLayer}`);
+    const visibleItems = [...currentLayerItems].filter(el=>el.style.display!='none');
+    
+    // 當前層全部消除，解鎖下一層
+    if(visibleItems.length === 0){
+        const nextLayer = currentLayer + 1;
+        $$(`.layer-${nextLayer}`).forEach(el=>{
+            el.style.cursor = 'pointer';
+            el.onclick = ()=>pick(el);
+        });
+    }
+}
+
+// ========== 操作歷史 & 復原功能（每局1次） ==========
+function saveHistory() {
+    const snapshot = {
+        slots:[...state.slots],
+        removed:state.removed,
+        items:state.items.map(it=>({
+            id:it.id, layer:it.layer, show:it.show,
+            display:it.div.style.display
+        }))
+    };
+    state.history.push(snapshot);
+    // 有歷史記錄且未用完次數時啟用復原按鈕
+    if(state.usedUndo < CONFIG.maxUndo && state.history.length > 0) {
+        $('.undo').disabled = false;
+        $('.undo').textContent = `復原 (剩${CONFIG.maxUndo - state.usedUndo}次)`;
+    }
+}
+
+function undo() {
+    if(state.history.length===0 || state.usedUndo>=CONFIG.maxUndo) return;
+    
+    state.usedUndo++;
+    $('.undo').disabled = true;
+    $('.undo').textContent = `復原 (剩${CONFIG.maxUndo - state.usedUndo}次)`;
+    
+    const lastState = state.history.pop();
+    // 恢復選擇區
+    state.slots = [...lastState.slots];
+    state.removed = lastState.removed;
+    // 恢復選擇區UI並重新排位
+    autoArrangeSlots();
+    
+    // 恢復元素狀態
+    lastState.items.forEach((itemState, idx)=>{
+        state.items[idx].show = itemState.show;
+        state.items[idx].div.style.display = itemState.display;
+    });
+}
+
+// ========== 重開本局（無限次） ==========
+function restartGame() {
+    if(!state.playing) {
+        showModal("提示", "請先開始遊戲！");
+        return;
+    }
+    
+    // 保留計時和玩家名，重置遊戲狀態
+    clearInterval(state.timer);
+    const elapsedTime = state.time;
+    // 重置復原/洗牌次數
+    state.usedUndo = 0;
+    state.usedShuffle = 0;
+    
+    // 重新渲染遊戲
+    renderStack(false);
+    
+    // 更新按鈕狀態
+    $('.undo').disabled = true;
+    $('.undo').textContent = `復原 (剩${CONFIG.maxUndo - state.usedUndo}次)`;
+    $('.shuffle').disabled = false;
+    $('.shuffle').textContent = `洗牌 (剩${CONFIG.maxShuffle - state.usedShuffle}次)`;
+    
+    // 重新啟動計時器
+    state.start = Date.now() - elapsedTime;
+    state.timer = setInterval(tick, 1000);
+    
+    showModal("提示", "本局已重新開始！");
+}
+
+// ========== 洗牌功能（每局1次） ==========
+function shuffle() {
+    if(state.usedShuffle >= CONFIG.maxShuffle) return;
+    
+    state.usedShuffle++;
+    $('.shuffle').disabled = true;
+    $('.shuffle').textContent = `洗牌 (剩${CONFIG.maxShuffle - state.usedShuffle}次)`;
+    saveHistory();
+    
+    const padding = 40;
+    const cx = stack.clientWidth / 2;
+    const cy = stack.clientHeight / 2;
+    const maxScale = Math.min(cx - padding, cy - padding) / 20;
+    
+    // 僅洗牌可見元素，且限制在愛心軌跡內
+    const visibleItems = state.items.filter(it=>it.show);
+    visibleItems.forEach(it=>{
+        const t = Math.random() * Math.PI * 2;
+        const scale = 10 + Math.random() * 12 * maxScale / 22;
+        const pos = getHeartPoint(t, scale, cx, cy, padding);
+        
+        it.div.style.left = (pos.x - 32.5) + 'px';
+        it.div.style.top = (pos.y - 32.5) + 'px';
+    });
+    
+    showModal("提示", "元素已重新洗牌！");
+}
+
+// ========== 計時器 ==========
+function tick() {
+    state.time = Date.now() - state.start;
+    const seconds = Math.floor(state.time/1000);
+    const minutes = String(Math.floor(seconds/60)).padStart(2,'0');
+    const secs = String(seconds%60).padStart(2,'0');
+    timerText.textContent = `${minutes}:${secs}`;
+}
+
+// ========== 開始遊戲 ==========
+function startGame() {
+    if(state.playing) return;
+    
+    state.name = $('.name-input').value || '玩家';
+    state.playing = true;
+    state.start = Date.now();
+    state.time = 0;
+    
+    // 重置功能使用次數
+    state.usedUndo = 0;
+    state.usedShuffle = 0;
+    
+    // 更新按鈕狀態
+    $('.start').disabled = true;
+    $('.undo').disabled = true;
+    $('.undo').textContent = `復原 (剩${CONFIG.maxUndo - state.usedUndo}次)`;
+    $('.shuffle').disabled = false;
+    $('.shuffle').textContent = `洗牌 (剩${CONFIG.maxShuffle - state.usedShuffle}次)`;
+    $('.restart').disabled = false;
+    $('.name-input').disabled = true;
+    
+    // 渲染遊戲、啟動計時
+    renderStack();
+    state.timer = setInterval(tick, 1000);
+}
+
+// ========== 遊戲結束（通關/失敗） ==========
+function gameOver(isWin) {
+    state.playing = false;
+    clearInterval(state.timer);
+    
+    // 禁用操作按鈕（重開仍可用）
+    $('.undo').disabled = true;
+    $('.shuffle').disabled = true;
+    $('.start').disabled = false;
+    $('.name-input').disabled = false;
+    
+    if(isWin) {
+        showModal("恭喜通關！", `🎉 ${state.name}，你的通關時間：${timerText.textContent}`, () => {
+            // 重置計時
+            timerText.textContent = '00:00';
+        });
+    } else {
+        showModal("遊戲結束", "❌ 選擇區已滿，挑戰失敗！", () => {
+            // 重置計時
+            timerText.textContent = '00:00';
+            renderStack(false);
+        });
+    }
+}
+
+// ========== 事件綁定 ==========
+$('.start').onclick = startGame;
+$('.undo').onclick = undo;
+$('.restart').onclick = restartGame;
+$('.shuffle').onclick = shuffle;
+
+// 頁面加載時初始化
+window.onload = ()=>{
+    renderStack(false);
+    // 初始化重開按鈕狀態
+    $('.restart').disabled = !CONFIG.restartUnlimited;
+};
+</script>
+</body>
+</html>
